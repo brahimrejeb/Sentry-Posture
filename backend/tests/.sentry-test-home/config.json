@@ -1,0 +1,12 @@
+{
+  "model_level": "full",
+  "sensitivity_threshold": 12.0,
+  "slouch_time_threshold": 30.0,
+  "alert_cooldown": 45.0,
+  "settling_window": 5.0,
+  "away_recalibrate_seconds": 60.0,
+  "stand_up_after_minutes": 30.0,
+  "daily_slouch_goal_pct": 0.15,
+  "daily_break_goal": 6,
+  "mode": "advanced"
+}
