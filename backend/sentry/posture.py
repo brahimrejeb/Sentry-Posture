@@ -142,13 +142,44 @@ class _AvgLandmark:
 def draw_debug(
     frame_bgr: np.ndarray,
     image_landmarks: list[Any] | None,
-    is_slouching: bool,
+    *,
+    tracker_state: Any = None,
+    is_slouching: bool = False,
 ) -> np.ndarray:
-    """Draw the C7→tragus vector and a horizontal reference."""
+    """Draw the C7→tragus vector, a horizontal reference, and the tracker state.
+
+    ``tracker_state`` is a :class:`~sentry.tracker.TrackerState` (passed as
+    ``Any`` to avoid a circular import). The overlay's colour and label
+    follow the same source of truth the StatusCard reads, so the camera
+    feed never disagrees with the UI.
+    """
+    h, w = frame_bgr.shape[:2]
+    state_str = getattr(tracker_state, "value", str(tracker_state) if tracker_state else "idle")
+
+    # Pick the label and color the same way the UI status reads them.
+    # BGR: red = slouching, green = locked + good, yellow = searching/idle,
+    # gray = paused (camera-tracked person away).
+    if state_str == "locked":
+        if is_slouching:
+            color = (0, 0, 220)
+            label = "SLOUCHING"
+        else:
+            color = (0, 200, 0)
+            label = "LOCKED"
+    elif state_str == "paused":
+        color = (160, 160, 160)
+        label = "PAUSED (away)"
+    elif state_str == "searching":
+        color = (0, 200, 220)
+        label = "SEARCHING"
+    else:
+        color = (180, 180, 180)
+        label = "IDLE"
+
+    cv2.putText(frame_bgr, label, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
+
     if not image_landmarks:
         return frame_bgr
-    color = (0, 0, 255) if is_slouching else (0, 200, 0)
-    h, w = frame_bgr.shape[:2]
 
     l_sh, r_sh = image_landmarks[LEFT_SHOULDER], image_landmarks[RIGHT_SHOULDER]
     l_ear, r_ear = image_landmarks[LEFT_EAR], image_landmarks[RIGHT_EAR]
@@ -159,7 +190,4 @@ def draw_debug(
     cv2.line(frame_bgr, c7, (c7[0] - 60, c7[1]), (255, 255, 255), 2)
     cv2.circle(frame_bgr, c7, 6, (255, 0, 0), -1)
     cv2.circle(frame_bgr, tragus, 6, (255, 0, 0), -1)
-
-    label = "FORWARD HEAD POSTURE" if is_slouching else "BASELINE OK"
-    cv2.putText(frame_bgr, label, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
     return frame_bgr

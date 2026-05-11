@@ -55,12 +55,20 @@ class AppState:
     monitor_thread: threading.Thread | None = None
     running: bool = True
     monitoring: bool = False
+    # ``paused`` releases the OS camera handle so other apps (Teams, browser,
+    # Windows Camera) can use the webcam while keeping the tracker, history
+    # session, and calibration alive. Distinct from ``monitoring`` so the user
+    # can pause without tearing down session state.
+    paused: bool = False
+    _paused_source: int | str | None = None
     last_observations: list[PoseObservation] = field(default_factory=list)
     last_primary: PoseObservation | None = None
+    last_is_slouching: bool = False
     last_alert_at: float | None = None
     welcome_back_pending: bool = False
     _lock: threading.Lock = field(default_factory=threading.Lock)
     _last_break_state_paused: bool = False
+    _paused_placeholder_jpeg: bytes | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         # Construct camera/detector/history here (not via default_factory) so
@@ -89,6 +97,8 @@ class AppState:
         if not self.camera.start(source):
             return False
         self.monitoring = True
+        self.paused = False
+        self._paused_source = source
         self.tracker.start(fps=MONITOR_FPS)
         if self.is_advanced:
             self.history.start_session()
@@ -97,14 +107,42 @@ class AppState:
 
     def stop_monitoring(self) -> None:
         self.monitoring = False
+        self.paused = False
+        self._paused_source = None
         if self._last_break_state_paused:
-            self.history.end_break()
+            self.history.end_break(min_seconds=self.config.settings.break_min_seconds)
             self._last_break_state_paused = False
         self.history.end_session()
         self.tracker.stop()
         self.camera.stop()
         self.last_observations = []
         self.last_primary = None
+        self.last_is_slouching = False
+
+    def pause_monitoring(self) -> bool:
+        """Release the camera so other apps can use it, keeping tracker state."""
+        if not self.monitoring or self.paused:
+            return False
+        # Close any open break cleanly so the pause window doesn't get
+        # counted as one giant break (or, in advanced mode, get truncated
+        # weirdly when the loop stops ticking).
+        if self._last_break_state_paused:
+            self.history.end_break(min_seconds=self.config.settings.break_min_seconds)
+            self._last_break_state_paused = False
+        self.camera.stop()
+        self.paused = True
+        self.last_observations = []
+        self.last_primary = None
+        self.last_is_slouching = False
+        return True
+
+    def resume_monitoring(self) -> bool:
+        if not self.paused or self._paused_source is None:
+            return False
+        if not self.camera.start(self._paused_source):
+            return False
+        self.paused = False
+        return True
 
     def calibrate(self, samples: int = 30) -> tuple[bool, str]:
         """Average several frames so the baseline is stable."""
@@ -134,7 +172,7 @@ def _monitor_loop(state: AppState) -> None:
     last_flush = time.time()
     last_tick_at: float | None = None
     while state.running:
-        if not state.monitoring:
+        if not state.monitoring or state.paused:
             time.sleep(0.1)
             last_tick_at = None
             continue
@@ -148,6 +186,7 @@ def _monitor_loop(state: AppState) -> None:
         with state._lock:
             state.last_observations = people
             state.last_primary = result.primary
+            state.last_is_slouching = result.is_slouching
             if result.welcome_back:
                 state.welcome_back_pending = True
 
@@ -162,7 +201,10 @@ def _monitor_loop(state: AppState) -> None:
             if is_paused_now and not state._last_break_state_paused:
                 state.history.start_break(now=now)
             elif not is_paused_now and state._last_break_state_paused:
-                state.history.end_break(now=now)
+                state.history.end_break(
+                    now=now,
+                    min_seconds=state.config.settings.break_min_seconds,
+                )
             state._last_break_state_paused = is_paused_now
 
             is_locked = result.state is TrackerState.LOCKED
@@ -199,9 +241,31 @@ def _monitor_loop(state: AppState) -> None:
         time.sleep(MONITOR_PERIOD)
 
 
+def _paused_placeholder(state: AppState) -> bytes:
+    """A one-shot JPEG shown in the video feed while the camera is released."""
+    if state._paused_placeholder_jpeg is not None:
+        return state._paused_placeholder_jpeg
+    import numpy as np
+
+    img = np.zeros((360, 640, 3), dtype=np.uint8)
+    img[:] = (32, 32, 38)
+    text1 = "Camera released"
+    text2 = "Other apps can use the webcam"
+    cv2.putText(img, text1, (140, 170), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (220, 220, 220), 2)
+    cv2.putText(img, text2, (110, 215), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (160, 160, 170), 2)
+    ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 80])
+    state._paused_placeholder_jpeg = buf.tobytes() if ok else b""
+    return state._paused_placeholder_jpeg
+
+
 def _video_generator(state: AppState, debug: bool):
     last_jpeg: bytes | None = None
     while state.running:
+        if state.paused or not state.monitoring:
+            jpeg = _paused_placeholder(state)
+            yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg + b"\r\n"
+            time.sleep(0.5)
+            continue
         frame = state.camera.read_frame(timeout=0.5)
         if frame is None:
             time.sleep(0.05)
@@ -213,11 +277,12 @@ def _video_generator(state: AppState, debug: bool):
         bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
         if debug:
             primary = state.last_primary
-            is_slouch = state.tracker.state is TrackerState.LOCKED and bool(
-                state.last_alert_at and time.time() - state.last_alert_at < 5
+            bgr = draw_debug(
+                bgr,
+                primary.image_landmarks if primary is not None else None,
+                tracker_state=state.tracker.state,
+                is_slouching=state.last_is_slouching,
             )
-            if primary is not None:
-                bgr = draw_debug(bgr, primary.image_landmarks, is_slouch)
         ok, buffer = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, 80])
         if not ok:
             time.sleep(0.05)
@@ -273,10 +338,28 @@ def create_app(config: RuntimeConfig | None = None) -> FastAPI:
         state.stop_monitoring()
         return SimpleResponse(status="stopped")
 
+    @app.post("/api/pause", response_model=SimpleResponse)
+    def pause() -> SimpleResponse:
+        if state.pause_monitoring():
+            return SimpleResponse(status="success", message="Camera released.")
+        if state.paused:
+            return SimpleResponse(status="success", message="Already paused.")
+        raise HTTPException(status_code=400, detail="Start monitoring first.")
+
+    @app.post("/api/resume", response_model=SimpleResponse)
+    def resume() -> SimpleResponse:
+        if state.resume_monitoring():
+            return SimpleResponse(status="success", message="Monitoring resumed.")
+        if not state.paused:
+            return SimpleResponse(status="success", message="Not paused.")
+        raise HTTPException(status_code=400, detail="Could not reopen the camera.")
+
     @app.post("/api/calibrate", response_model=SimpleResponse)
     def calibrate() -> SimpleResponse:
         if not state.monitoring:
             raise HTTPException(status_code=400, detail="Start monitoring first.")
+        if state.paused:
+            raise HTTPException(status_code=400, detail="Resume monitoring to calibrate.")
         ok, msg = state.calibrate()
         return SimpleResponse(status="success" if ok else "error", message=msg)
 
@@ -304,6 +387,8 @@ def create_app(config: RuntimeConfig | None = None) -> FastAPI:
             s.daily_slouch_goal_pct = req.daily_slouch_goal_pct
         if req.daily_break_goal is not None:
             s.daily_break_goal = req.daily_break_goal
+        if req.break_min_seconds is not None:
+            s.break_min_seconds = req.break_min_seconds
         if req.mode is not None:
             s.mode = req.mode
         state._apply_settings_to_tracker(s)
@@ -402,6 +487,7 @@ def _build_status(state: AppState) -> StatusResponse:
     state.welcome_back_pending = False
     return StatusResponse(
         monitoring=state.monitoring,
+        paused=state.paused,
         state=state.tracker.state,
         calibrated=state.tracker.baseline_cva is not None,
         is_slouching=state.tracker.state is TrackerState.LOCKED
@@ -427,6 +513,7 @@ def _build_status(state: AppState) -> StatusResponse:
         stand_up_after_seconds=s.stand_up_after_minutes * 60.0,
         daily_slouch_goal_pct=s.daily_slouch_goal_pct,
         daily_break_goal=s.daily_break_goal,
+        break_min_seconds=s.break_min_seconds,
         mode=s.mode,
     )
 

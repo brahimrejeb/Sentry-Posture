@@ -14,6 +14,7 @@ import { useView } from './hooks/useView';
 
 const DEFAULT_STATUS: Status = {
   monitoring: false,
+  paused: false,
   state: 'idle',
   calibrated: false,
   is_slouching: false,
@@ -34,6 +35,7 @@ const DEFAULT_STATUS: Status = {
   stand_up_after_seconds: 3000,
   daily_slouch_goal_pct: 0.2,
   daily_break_goal: 5,
+  break_min_seconds: 120,
   mode: 'simple',
 };
 
@@ -123,6 +125,22 @@ export default function App() {
     }
   };
 
+  const togglePause = async () => {
+    setBusy(true);
+    try {
+      if (status.paused) {
+        const res = await api.resume();
+        if (res.status !== 'success') {
+          setBanner({ kind: 'warning', text: res.message ?? 'Could not resume monitoring.' });
+        }
+      } else {
+        await api.pause();
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const onCalibrationComplete = useCallback((ok: boolean, message?: string) => {
     setBanner(
       ok
@@ -178,6 +196,7 @@ export default function App() {
           busy={busy}
           startMonitoring={startMonitoring}
           stopMonitoring={stopMonitoring}
+          togglePause={togglePause}
           debugMode={debugMode}
           onCalibrationComplete={onCalibrationComplete}
         />
@@ -216,6 +235,7 @@ interface LiveProps {
   busy: boolean;
   startMonitoring: () => void;
   stopMonitoring: () => void;
+  togglePause: () => void;
   debugMode: boolean;
   onCalibrationComplete: (ok: boolean, message?: string) => void;
 }
@@ -224,10 +244,25 @@ function LiveView(props: LiveProps) {
   const { status, devices, selectedDevice, setSelectedDevice, ipAddress, setIpAddress } = props;
   const isAdvanced = status.mode === 'advanced';
   const showStandUpRing =
-    isAdvanced && status.monitoring && status.calibrated && status.state === 'locked';
+    isAdvanced && status.monitoring && status.calibrated && status.state === 'locked' && !status.paused;
 
   return (
     <>
+      {status.paused && (
+        <div className="banner">
+          <span>
+            Camera released — other apps (Teams, Zoom, browser) can use the webcam.
+            Click Resume to continue monitoring.
+          </span>
+          <button
+            style={{ padding: '4px 10px', marginLeft: 'auto' }}
+            onClick={props.togglePause}
+            disabled={props.busy}
+          >
+            {props.busy ? 'Resuming…' : 'Resume'}
+          </button>
+        </div>
+      )}
       <div className="live-row">
         <div style={{ flex: 1 }}>
           <StatusCard status={status} />
@@ -289,8 +324,18 @@ function LiveView(props: LiveProps) {
                       .then((r) => props.onCalibrationComplete(r.status === 'success', r.message))
                       .catch((err) => props.onCalibrationComplete(false, String(err)))
                   }
+                  disabled={status.paused}
+                  title={status.paused ? 'Resume monitoring to recalibrate.' : undefined}
                 >
                   Re-calibrate
+                </button>
+                <button
+                  className="secondary"
+                  onClick={props.togglePause}
+                  disabled={props.busy}
+                  title="Release the webcam so Teams, Zoom or the browser can use it"
+                >
+                  {status.paused ? 'Resume monitoring' : 'Pause (release camera)'}
                 </button>
                 <button className="danger" onClick={props.stopMonitoring} disabled={props.busy}>
                   Stop monitoring
@@ -299,7 +344,7 @@ function LiveView(props: LiveProps) {
             </div>
           )}
 
-          {props.debugMode && isAdvanced && (
+          {props.debugMode && (
             <div className="card">
               <div className="video">
                 <img src={api.feedUrl(true)} alt="Camera feed" />

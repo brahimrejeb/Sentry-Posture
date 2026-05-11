@@ -10,6 +10,7 @@ export interface DeviceInfo {
 
 export interface Status {
   monitoring: boolean;
+  paused: boolean;
   state: TrackerState;
   calibrated: boolean;
   is_slouching: boolean;
@@ -30,6 +31,7 @@ export interface Status {
   stand_up_after_seconds: number;
   daily_slouch_goal_pct: number;
   daily_break_goal: number;
+  break_min_seconds: number;
   mode: Mode;
 }
 
@@ -101,6 +103,7 @@ type ConfigPatch = {
   stand_up_after_minutes?: number;
   daily_slouch_goal_pct?: number;
   daily_break_goal?: number;
+  break_min_seconds?: number;
   mode?: Mode;
 };
 
@@ -113,6 +116,9 @@ export const api = {
       body: JSON.stringify({ source }),
     }),
   stop: () => jsonFetch<{ status: string }>('/stop', { method: 'POST' }),
+  pause: () => jsonFetch<{ status: string; message?: string }>('/pause', { method: 'POST' }),
+  resume: () =>
+    jsonFetch<{ status: string; message?: string }>('/resume', { method: 'POST' }),
   calibrate: () =>
     jsonFetch<{ status: string; message?: string }>('/calibrate', { method: 'POST' }),
   config: (body: ConfigPatch) =>

@@ -24,7 +24,12 @@ def _make_icon_image() -> Image.Image:
     return image
 
 
-def run_tray(open_url: str, on_quit: Callable[[], None]) -> threading.Thread:
+def run_tray(
+    open_url: str,
+    on_quit: Callable[[], None],
+    on_pause_toggle: Callable[[], None] | None = None,
+    is_paused: Callable[[], bool] | None = None,
+) -> threading.Thread:
     """Start the tray on a background thread. Returns the thread."""
 
     def _quit(icon: pystray.Icon, _item: pystray.MenuItem) -> None:
@@ -34,14 +39,28 @@ def run_tray(open_url: str, on_quit: Callable[[], None]) -> threading.Thread:
     def _open(_icon: pystray.Icon, _item: pystray.MenuItem) -> None:
         webbrowser.open(open_url)
 
+    def _toggle_pause(_icon: pystray.Icon, _item: pystray.MenuItem) -> None:
+        if on_pause_toggle is not None:
+            on_pause_toggle()
+
+    menu_items: list[pystray.MenuItem] = [
+        pystray.MenuItem("Open dashboard", _open, default=True),
+    ]
+    if on_pause_toggle is not None:
+        menu_items.append(
+            pystray.MenuItem(
+                "Pause monitoring (release camera)",
+                _toggle_pause,
+                checked=(lambda _item: bool(is_paused() if is_paused else False)),
+            )
+        )
+    menu_items.append(pystray.MenuItem("Quit Sentry", _quit))
+
     icon = pystray.Icon(
         "Sentry",
         _make_icon_image(),
         "Sentry — Posture Monitor",
-        menu=pystray.Menu(
-            pystray.MenuItem("Open dashboard", _open, default=True),
-            pystray.MenuItem("Quit Sentry", _quit),
-        ),
+        menu=pystray.Menu(*menu_items),
     )
 
     thread = threading.Thread(target=icon.run, daemon=True, name="sentry-tray")

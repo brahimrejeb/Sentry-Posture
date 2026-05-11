@@ -24,6 +24,7 @@ class ConfigRequest(BaseModel):
     stand_up_after_minutes: float | None = Field(default=None, ge=10.0, le=240.0)
     daily_slouch_goal_pct: float | None = Field(default=None, ge=0.0, le=1.0)
     daily_break_goal: int | None = Field(default=None, ge=0, le=24)
+    break_min_seconds: float | None = Field(default=None, ge=0.0, le=1800.0)
     mode: Mode | None = None
 
 
@@ -38,6 +39,7 @@ class DevicesResponse(BaseModel):
 
 class StatusResponse(BaseModel):
     monitoring: bool
+    paused: bool = False
     state: TrackerState
     calibrated: bool
     is_slouching: bool
@@ -58,6 +60,7 @@ class StatusResponse(BaseModel):
     stand_up_after_seconds: float = 3000.0
     daily_slouch_goal_pct: float = 0.20
     daily_break_goal: int = 5
+    break_min_seconds: float = 120.0
     mode: Mode = "simple"
 
 

@@ -104,6 +104,13 @@ def main(argv: list[str] | None = None) -> int:
     ensure_model(config.settings.model_level)
 
     app = create_app(config)
+    state = app.state.sentry
+
+    def _toggle_pause() -> None:
+        if state.paused:
+            state.resume_monitoring()
+        else:
+            state.pause_monitoring()
 
     server_url = f"http://{args.host}:{actual_port}/"
     if not args.dev and not UI_DIST_DIR.exists():
@@ -127,7 +134,12 @@ def main(argv: list[str] | None = None) -> int:
         try:
             from .tray import run_tray
 
-            tray_thread = run_tray(server_url, on_quit=lambda: sys.exit(0))
+            tray_thread = run_tray(
+                server_url,
+                on_quit=lambda: sys.exit(0),
+                on_pause_toggle=_toggle_pause,
+                is_paused=lambda: state.paused,
+            )
         except Exception as exc:
             print(f"Could not start tray icon: {exc}", file=sys.stderr)
 

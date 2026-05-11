@@ -100,6 +100,10 @@ class HistoryStore:
     _bucket: _MinuteBucket | None = field(default=None, init=False)
     _open_session_id: int | None = field(default=None, init=False)
     _open_break_id: int | None = field(default=None, init=False)
+    # Start time of a break that hasn't been persisted yet. We defer the
+    # INSERT until ``end_break`` so we can drop breaks shorter than the
+    # configured minimum and keep dashboard counts realistic.
+    _pending_break_started_at: float | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         if self.db_path != ":memory:":
@@ -144,34 +148,32 @@ class HistoryStore:
             self._conn.commit()
             self._open_session_id = None
 
-    def start_break(self, now: float | None = None) -> int:
-        now = time.time() if now is None else now
-        with self._lock:
-            cur = self._conn.execute(
-                "INSERT INTO breaks(started_at) VALUES (?)", (now,)
-            )
-            self._conn.commit()
-            self._open_break_id = cur.lastrowid
-            return self._open_break_id  # type: ignore[return-value]
+    def start_break(self, now: float | None = None) -> None:
+        # Record the start time only. The row is inserted at ``end_break`` so
+        # we can filter out absences shorter than the user's threshold.
+        self._pending_break_started_at = time.time() if now is None else now
 
-    def end_break(self, now: float | None = None) -> None:
-        if self._open_break_id is None:
-            return
+    def end_break(self, now: float | None = None, min_seconds: float = 0.0) -> bool:
+        """Close the pending break. Returns True if it was persisted.
+
+        Breaks shorter than ``min_seconds`` are silently discarded so that
+        brief detection drops don't pollute the dashboard count.
+        """
+        started_at = self._pending_break_started_at
+        if started_at is None:
+            return False
         now = time.time() if now is None else now
+        seconds = max(0.0, now - started_at)
+        self._pending_break_started_at = None
+        if seconds < min_seconds:
+            return False
         with self._lock:
-            row = self._conn.execute(
-                "SELECT started_at FROM breaks WHERE id = ?", (self._open_break_id,)
-            ).fetchone()
-            if row is None:
-                self._open_break_id = None
-                return
-            seconds = max(0.0, now - row["started_at"])
             self._conn.execute(
-                "UPDATE breaks SET ended_at = ?, seconds = ? WHERE id = ?",
-                (now, seconds, self._open_break_id),
+                "INSERT INTO breaks(started_at, ended_at, seconds) VALUES (?, ?, ?)",
+                (started_at, now, seconds),
             )
             self._conn.commit()
-            self._open_break_id = None
+        return True
 
     def record_alert(self, kind: str = "slouch", now: float | None = None) -> None:
         now = time.time() if now is None else now
@@ -260,6 +262,7 @@ class HistoryStore:
         self._bucket = None
         self._open_session_id = None
         self._open_break_id = None
+        self._pending_break_started_at = None
 
     def close(self) -> None:
         self.flush()

@@ -64,6 +64,9 @@ class UserSettings:
     stand_up_after_minutes: float = 50.0
     daily_slouch_goal_pct: float = 0.20      # at most 20% of locked time slouching
     daily_break_goal: int = 5
+    # Only absences that last at least this long are recorded as breaks. Brief
+    # detection drops or quick lean-outs no longer inflate the dashboard count.
+    break_min_seconds: float = 120.0
 
     # UI mode. Simple = core slouch detection only. Advanced = history,
     # goals, stand-up nudges, debug overlay.

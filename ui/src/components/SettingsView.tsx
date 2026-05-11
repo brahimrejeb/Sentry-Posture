@@ -275,23 +275,21 @@ export function SettingsView({ status, onChange, debugMode, setDebugMode }: Prop
         )}
       </div>
 
-      {isAdvanced && (
-        <div className="card section">
-          <h2>Diagnostics</h2>
-          <div className="field-row">
-            <label htmlFor="debug">Show camera + landmarks</label>
-            <input
-              id="debug"
-              type="checkbox"
-              checked={debugMode}
-              onChange={(e) => setDebugMode(e.target.checked)}
-            />
-          </div>
-          <div className="helper">
-            Visible only on the Live tab. Frames stay on this machine.
-          </div>
+      <div className="card section">
+        <h2>Diagnostics</h2>
+        <div className="field-row">
+          <label htmlFor="debug">Show camera + landmarks</label>
+          <input
+            id="debug"
+            type="checkbox"
+            checked={debugMode}
+            onChange={(e) => setDebugMode(e.target.checked)}
+          />
         </div>
-      )}
+        <div className="helper">
+          Visible only on the Live tab. Frames stay on this machine.
+        </div>
+      </div>
 
       {isAdvanced && (
         <div className="card section">

@@ -6,6 +6,7 @@ import type { Status } from './api';
 
 const idleStatus: Status = {
   monitoring: false,
+  paused: false,
   state: 'idle',
   calibrated: false,
   is_slouching: false,
@@ -26,6 +27,7 @@ const idleStatus: Status = {
   stand_up_after_seconds: 3000,
   daily_slouch_goal_pct: 0.2,
   daily_break_goal: 5,
+  break_min_seconds: 120,
   mode: 'simple',
 };
 
